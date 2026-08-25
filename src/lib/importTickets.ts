@@ -11,7 +11,8 @@ const aliases: Record<string, string[]> = {
   'SLA Status': ['slastatus', 'sla', 'slahours'], 'Approval Status': ['approvalstatus', 'approval'],
   'Resolution Notes': ['resolutionnotes', 'notes', 'resolutiondetail'], 'Resolution Quality': ['resolutionquality', 'quality'],
 };
-const validTypes = new Set(['incident', 'service request', 'change request']);
+const canonicalTicketTypes: Record<string, RawTicket['ticketType']> = { incident: 'Incident', servicerequest: 'Service Request', changerequest: 'Change Request' };
+const canonicalTicketType = (value: unknown) => canonicalTicketTypes[normalize(String(value).replace(/[\u200B-\u200D\uFEFF]/g, ''))];
 const asDate = (value: unknown) => {
   if (value instanceof Date) return value.toISOString();
   const text = String(value ?? '').trim(); return text && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : '';
@@ -33,11 +34,11 @@ export async function parseTicketFile(file: File): Promise<ImportResult> {
     if (!rows.length) return { tickets: [], error: 'Import failed: No ticket records found.' };
     const read = (row: unknown[], name: string) => { const index = column(name); return index === undefined ? '' : String(row[index] ?? '').trim(); };
     const tickets = rows.map((row, index) => {
-      const ticketId = read(row, 'Ticket ID'); const ticketType = read(row, 'Ticket Type'); const title = read(row, 'Title'); const description = read(row, 'Description');
+      const ticketId = read(row, 'Ticket ID'); const rawTicketType = read(row, 'Ticket Type'); const ticketType = canonicalTicketType(rawTicketType); const title = read(row, 'Title'); const description = read(row, 'Description');
       const createdDate = asDate(row[column('Created Date')!]); const resolutionDate = asDate(row[column('Resolution Date')!]); const approvalStatus = read(row, 'Approval Status'); const resolutionQuality = read(row, 'Resolution Quality');
-      const required = [['Ticket ID', ticketId], ['Ticket Type', ticketType], ['Title', title], ['Description', description], ['Created Date', createdDate], ['Resolution Date', resolutionDate], ['Approval Status', approvalStatus], ['Resolution Quality', resolutionQuality]] as const;
+      const required = [['Ticket ID', ticketId], ['Ticket Type', rawTicketType], ['Title', title], ['Description', description], ['Created Date', createdDate], ['Resolution Date', resolutionDate], ['Approval Status', approvalStatus], ['Resolution Quality', resolutionQuality]] as const;
       const empty = required.find(([, value]) => !value); if (empty) throw new Error(`Import failed: Malformed row ${index + 2} — ${empty[0]} is empty.`);
-      if (!validTypes.has(ticketType.toLowerCase())) throw new Error(`Import failed: Invalid row ${index + 2} — Ticket Type must be Incident, Service Request, or Change Request.`);
+      if (!ticketType) throw new Error(`Import failed: Invalid row ${index + 2} — Ticket Type must be Incident, Service Request, or Change Request.`);
       return { ticketId, ticketType, priority: read(row, 'Priority') || 'Unspecified', title, description, createdDate, resolutionDate, slaStatus: read(row, 'SLA Status') || 'Not provided', approvalStatus, resolutionNotes: read(row, 'Resolution Notes') || 'Not provided', resolutionQuality };
     });
     return { tickets };
