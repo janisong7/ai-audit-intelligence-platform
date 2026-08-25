@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+.vercel
