@@ -37,12 +37,17 @@ export type AuditDecision = {
   kind?: AuditDecisionKind;
   decisionDate?: string;
   rationale?: string;
+  overrideReason?: string;
 };
 
 export type AuditTrailEntry = {
   ticketId: string;
-  event: 'AI assessment generated' | 'Auditor review completed';
+  event: 'AI assessment generated' | 'Auditor review completed' | 'Governance rule updated';
   occurredAt: string;
   decision?: AuditDecisionKind;
   rationale?: string;
+  overrideReason?: string;
+  recommendation?: string;
+  confidence?: number;
+  changedBy?: string;
 };
