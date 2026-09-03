@@ -10,6 +10,15 @@ type Page = 'Dashboard' | 'Ticket Upload' | 'AI Audit Analysis' | 'Risk Review' 
 type Mode = 'read' | 'decision';
 type TicketView = { raw: RawTicket; assessment: AuditAssessment };
 const stored = (key: string, fallback: string) => localStorage.getItem(key) ?? fallback;
+const loadGovernanceRules = (): GovernanceRules => {
+  const saved = JSON.parse(stored('aaip-governance-rules', '{}')) as Partial<GovernanceRules>;
+  // Migrate the previous prototype default (High threshold = 40) so existing browsers
+  // immediately use the revised four-level risk boundary after deployment.
+  if (saved.highThreshold === 40 && (saved.mediumThreshold ?? 70) === 70 && (saved.lowThreshold ?? 90) === 90) {
+    saved.highThreshold = 50;
+  }
+  return { ...defaultGovernanceRules, ...saved };
+};
 const formatDate = (value: string) => new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
 const today = () => new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }).format(new Date());
 const evidenceReference = (ticket: TicketView, finding: string) => {
@@ -116,7 +125,7 @@ export default function App() {
   const [page, setPage] = useState<Page>('Dashboard');
   const [rawTickets, setRawTickets] = useState<RawTicket[]>(() => JSON.parse(stored('aaip-raw-tickets', '[]')) as RawTicket[]);
   const [assessments, setAssessments] = useState<AuditAssessment[]>(() => JSON.parse(stored('aaip-assessments', '[]')) as AuditAssessment[]);
-  const [governanceRules, setGovernanceRules] = useState<GovernanceRules>(() => ({ ...defaultGovernanceRules, ...JSON.parse(stored('aaip-governance-rules', '{}')) as Partial<GovernanceRules> }));
+  const [governanceRules, setGovernanceRules] = useState<GovernanceRules>(loadGovernanceRules);
   const [selectedId, setSelectedId] = useState(demoTickets[0].ticketId);
   const [from, setFrom] = useState<Page>('Dashboard');
   const [mode, setMode] = useState<Mode>('read');
