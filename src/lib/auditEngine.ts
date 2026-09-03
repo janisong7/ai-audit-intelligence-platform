@@ -32,7 +32,7 @@ export const defaultGovernanceRules: GovernanceRules = {
   documentationMinLength: 20,
   lowThreshold: 90,
   mediumThreshold: 70,
-  highThreshold: 40,
+  highThreshold: 50,
 };
 
 /**
@@ -43,8 +43,8 @@ export const defaultGovernanceRules: GovernanceRules = {
  * which criteria depend on qualitative judgement calls (agreement drops noticeably).
  */
 export const reviewerProfiles: Record<'Strict Reviewer' | 'Lenient Reviewer', GovernanceRules> = {
-  'Strict Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 30, lowThreshold: 90, mediumThreshold: 70, highThreshold: 40 },
-  'Lenient Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 8, lowThreshold: 90, mediumThreshold: 70, highThreshold: 40 },
+  'Strict Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 30, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50 },
+  'Lenient Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 8, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50 },
 };
 
 const complete = (value: string, minLength: number) => {
