@@ -1,0 +1,6 @@
+Ticket ID,Ticket Type,Priority,Title,Description,Created Date,Resolution Date,SLA Status,Approval Status,Resolution Notes,Resolution Quality
+INC-22001,Incident,P1,Network outage at distribution hub,Warehouse network connectivity was interrupted during morning dispatch.,2026-08-01T08:00:00,2026-08-02T18:00:00,Breached by 10 hours,Missing approval evidence,Network restored.,Poor
+CR-22002,Change Request,P2,Firewall rules update,Update firewall rules for a new supplier VPN connection.,2026-08-03T09:00:00,2026-08-03T14:00:00,Within SLA,Approved,Change approved and implementation evidence attached to the record.,Good
+SR-22003,Service Request,P3,Finance reporting access,Provision reporting access for a new finance analyst.,2026-08-04T09:00:00,2026-08-05T13:00:00,Within SLA,Approved,Access granted.,Fair
+INC-22004,Incident,P2,Customer portal latency,Customers experienced intermittent slowness in the order portal.,2026-08-06T08:00:00,2026-08-06T11:00:00,Within SLA,Not required,Root cause and monitoring updates documented in the resolution record.,Good
+CR-22005,Change Request,P1,Database patch release,Apply urgent database security patch to production services.,2026-08-07T07:00:00,2026-08-09T12:00:00,Breached by 14 hours,Missing CAB approval,Patch applied.,Poor
