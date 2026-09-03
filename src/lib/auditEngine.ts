@@ -22,6 +22,10 @@ export type GovernanceRules = {
   lowThreshold: number;
   mediumThreshold: number;
   highThreshold: number;
+  /** Used only by the Auditor Consistency Intelligence comparison (not user-editable in Governance
+   * settings): whether "Fair" resolution quality is itself treated as an escalation-worthy exception.
+   * This is a judgement call reviewers can reasonably disagree on. */
+  treatFairQualityAsException: boolean;
 };
 export const defaultGovernanceRules: GovernanceRules = {
   slaPenalty: 15,
@@ -33,6 +37,7 @@ export const defaultGovernanceRules: GovernanceRules = {
   lowThreshold: 90,
   mediumThreshold: 70,
   highThreshold: 50,
+  treatFairQualityAsException: false,
 };
 
 /**
@@ -43,8 +48,8 @@ export const defaultGovernanceRules: GovernanceRules = {
  * which criteria depend on qualitative judgement calls (agreement drops noticeably).
  */
 export const reviewerProfiles: Record<'Strict Reviewer' | 'Lenient Reviewer', GovernanceRules> = {
-  'Strict Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 30, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50 },
-  'Lenient Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 8, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50 },
+  'Strict Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 30, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50, treatFairQualityAsException: true },
+  'Lenient Reviewer': { slaPenalty: 15, approvalPenalty: 20, documentationPenalty: 15, poorQualityPenalty: 10, fairQualityPenalty: 5, documentationMinLength: 8, lowThreshold: 90, mediumThreshold: 70, highThreshold: 50, treatFairQualityAsException: false },
 };
 
 const complete = (value: string, minLength: number) => {
@@ -57,6 +62,30 @@ const hoursBetween = (start: string, end: string) => {
   const ms = new Date(end).getTime() - new Date(start).getTime();
   return Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null;
 };
+
+/**
+ * Resolution-time statistics grouped by ticket type. Incidents, Service Requests and Change
+ * Requests follow structurally different resolution-time patterns, so anomaly detection compares
+ * each ticket only against others of the same type rather than pooling every ticket type into one
+ * dataset-wide average.
+ */
+export function resolutionStatsByTicketType(tickets: RawTicket[]): Map<string, { averageHours: number; standardDeviation: number }> {
+  const hoursByType = new Map<string, number[]>();
+  for (const ticket of tickets) {
+    const hours = hoursBetween(ticket.createdDate, ticket.resolutionDate);
+    if (hours === null) continue;
+    const list = hoursByType.get(ticket.ticketType) ?? [];
+    list.push(hours);
+    hoursByType.set(ticket.ticketType, list);
+  }
+  const stats = new Map<string, { averageHours: number; standardDeviation: number }>();
+  for (const [ticketType, hours] of hoursByType) {
+    const averageHours = hours.reduce((sum, value) => sum + value, 0) / hours.length;
+    const standardDeviation = Math.sqrt(hours.reduce((sum, value) => sum + (value - averageHours) ** 2, 0) / hours.length);
+    stats.set(ticketType, { averageHours, standardDeviation });
+  }
+  return stats;
+}
 
 export function assessTicket(ticket: RawTicket, averageHours = 0, standardDeviation = 0, rules: GovernanceRules = defaultGovernanceRules): AssessmentResult {
   let score = 100;
@@ -74,11 +103,13 @@ export function assessTicket(ticket: RawTicket, averageHours = 0, standardDeviat
   if (quality === 'fair') { score -= rules.fairQualityPenalty; findings.push('Resolution quality could be improved.'); }
   const resolutionHours = hoursBetween(ticket.createdDate, ticket.resolutionDate);
   const anomalyDetected = resolutionHours !== null && standardDeviation > 0 && resolutionHours > averageHours + standardDeviation;
-  if (anomalyDetected) findings.push('Prototype anomaly rule: resolution time is significantly higher than the imported dataset average.');
+  if (anomalyDetected) findings.push('Prototype anomaly rule: resolution time is significantly higher than the average for this ticket type in the imported dataset.');
   if (findings.length > 1) recommendations.push('Prioritise this ticket for auditor review.');
   if (!findings.length) findings.push('No material control exceptions found.');
   score = Math.max(0, Math.min(100, score));
   const riskLevel: RiskLevel = score >= rules.lowThreshold ? 'Low' : score >= rules.mediumThreshold ? 'Medium' : score >= rules.highThreshold ? 'High' : 'Critical';
+  // "confidence" is an evidence-coverage indicator: it reflects how many independent, evidence-based
+  // findings back this assessment. It is NOT a statistical or model-derived probability of correctness.
   return { complianceScore: score, riskLevel, findings, recommendations: [...new Set(recommendations)], confidence: Math.min(96, 68 + findings.length * 8), anomalyDetected, resolutionHours };
 }
 
@@ -94,12 +125,13 @@ export type ConsistencyReport = { criteria: CriterionAgreement[]; riskLevelAgree
  * expected to show the most disagreement. This is a simulated comparison, not real historical auditor
  * data, and is presented as such in the UI.
  */
-export function compareReviewerProfiles(tickets: RawTicket[], averageHours: number, standardDeviation: number, profileA: GovernanceRules, profileB: GovernanceRules): ConsistencyReport {
+export function compareReviewerProfiles(tickets: RawTicket[], profileA: GovernanceRules, profileB: GovernanceRules): ConsistencyReport {
   const checks: { criterion: string; interpretation: CriterionAgreement['interpretation']; test: (t: RawTicket, rules: GovernanceRules) => boolean }[] = [
     { criterion: 'SLA Compliance', interpretation: 'Structured-field check — reads directly from ticket data', test: t => /breach/i.test(t.slaStatus) },
     { criterion: 'Approval Verification', interpretation: 'Structured-field check — reads directly from ticket data', test: t => /missing/i.test(t.approvalStatus) },
     { criterion: 'Resolution Quality', interpretation: 'Structured-field check — reads directly from ticket data', test: t => t.resolutionQuality.trim().toLowerCase() !== 'good' },
     { criterion: 'Documentation Completeness', interpretation: 'Judgement-based — depends on reviewer interpretation', test: (t, rules) => !complete(t.resolutionNotes, rules.documentationMinLength) },
+    { criterion: 'Fair-Quality Escalation Call', interpretation: 'Judgement-based — depends on reviewer interpretation', test: (t, rules) => rules.treatFairQualityAsException && t.resolutionQuality.trim().toLowerCase() === 'fair' },
   ];
   const criteria = checks.map(({ criterion, interpretation, test }) => {
     let agree = 0;
@@ -107,10 +139,12 @@ export function compareReviewerProfiles(tickets: RawTicket[], averageHours: numb
     const disagree = tickets.length - agree;
     return { criterion, agreementPercent: tickets.length ? Math.round((agree / tickets.length) * 100) : 100, agreeCount: agree, disagreeCount: disagree, interpretation };
   });
+  const statsByType = resolutionStatsByTicketType(tickets);
   let riskAgree = 0;
   for (const ticket of tickets) {
-    const a = assessTicket(ticket, averageHours, standardDeviation, profileA).riskLevel;
-    const b = assessTicket(ticket, averageHours, standardDeviation, profileB).riskLevel;
+    const stats = statsByType.get(ticket.ticketType) ?? { averageHours: 0, standardDeviation: 0 };
+    const a = assessTicket(ticket, stats.averageHours, stats.standardDeviation, profileA).riskLevel;
+    const b = assessTicket(ticket, stats.averageHours, stats.standardDeviation, profileB).riskLevel;
     if (a === b) riskAgree += 1;
   }
   const riskLevelAgreementPercent = tickets.length ? Math.round((riskAgree / tickets.length) * 100) : 100;
