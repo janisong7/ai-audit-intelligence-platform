@@ -15,6 +15,12 @@ export type RawTicket = {
   approvalStatus: string;
   resolutionNotes: string;
   resolutionQuality: string;
+  /** Optional behavioural features — present when the CSV includes event-log-derived columns.
+   *  When absent, the Isolation Forest runs on the four structured ticket fields only. */
+  reassignmentCount?: number;
+  reopenCount?: number;
+  activityCount?: number;
+  groupDiversity?: number;
 };
 
 /** Calculated from RawTicket by the audit engine. */

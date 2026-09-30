@@ -1,4 +1,5 @@
 import type { RawTicket, RiskLevel } from '../types/audit';
+import { isolationForestScores } from './isolationForest';
 
 export type { RawTicket, RiskLevel } from '../types/audit';
 
@@ -10,6 +11,7 @@ export type AssessmentResult = {
   confidence: number;
   anomalyDetected: boolean;
   resolutionHours: number | null;
+  ifAnomalyScore?: number;
 };
 
 export type GovernanceRules = {
@@ -64,6 +66,51 @@ const hoursBetween = (start: string, end: string) => {
 };
 
 /**
+ * Run Isolation Forest across the full ticket set and return per-ticket results.
+ *
+ * Features used (always): resolution hours, SLA breach (binary), approval missing (binary),
+ * resolution quality (0 = good, 1 = fair, 2 = poor).
+ * Features used when present in the CSV: reassignmentCount, reopenCount, activityCount, groupDiversity.
+ *
+ * Threshold: top 5% of anomaly scores are flagged (≈ contamination = 0.05, matching the
+ * offline BPI 2014 analysis). Scores are in [0, 1] — higher means more anomalous.
+ */
+export type IFResult = { score: number; anomaly: boolean; featureCount: number };
+
+export function computeIFScores(tickets: RawTicket[]): Map<string, IFResult> {
+  if (tickets.length < 2) {
+    return new Map(tickets.map(t => [t.ticketId, { score: 0.5, anomaly: false, featureCount: 4 }]));
+  }
+  const hasReassignment = tickets.some(t => t.reassignmentCount !== undefined);
+  const hasReopen      = tickets.some(t => t.reopenCount       !== undefined);
+  const hasActivity    = tickets.some(t => t.activityCount     !== undefined);
+  const hasGroup       = tickets.some(t => t.groupDiversity    !== undefined);
+  const featureCount   = 4 + (hasReassignment ? 1 : 0) + (hasReopen ? 1 : 0) + (hasActivity ? 1 : 0) + (hasGroup ? 1 : 0);
+
+  const matrix = tickets.map(t => {
+    const resHours  = hoursBetween(t.createdDate, t.resolutionDate) ?? 0;
+    const slaBreach = /breach/i.test(t.slaStatus)   ? 1 : 0;
+    const appMissing = /missing/i.test(t.approvalStatus) ? 1 : 0;
+    const q = t.resolutionQuality.trim().toLowerCase();
+    const quality = q === 'poor' ? 2 : q === 'fair' ? 1 : 0;
+    const features = [resHours, slaBreach, appMissing, quality];
+    if (hasReassignment) features.push(t.reassignmentCount ?? 0);
+    if (hasReopen)       features.push(t.reopenCount       ?? 0);
+    if (hasActivity)     features.push(t.activityCount     ?? 0);
+    if (hasGroup)        features.push(t.groupDiversity    ?? 0);
+    return features;
+  });
+
+  const scores = isolationForestScores(matrix, 100, 256);
+
+  // Threshold = 95th-percentile score → flags the top 5% (contamination = 0.05)
+  const sorted = [...scores].sort((a, b) => b - a);
+  const cutoff = sorted[Math.max(0, Math.floor(scores.length * 0.05))] ?? 0.5;
+
+  return new Map(tickets.map((t, i) => [t.ticketId, { score: scores[i], anomaly: scores[i] >= cutoff, featureCount }]));
+}
+
+/**
  * Resolution-time statistics grouped by ticket type. Incidents, Service Requests and Change
  * Requests follow structurally different resolution-time patterns, so anomaly detection compares
  * each ticket only against others of the same type rather than pooling every ticket type into one
@@ -87,7 +134,7 @@ export function resolutionStatsByTicketType(tickets: RawTicket[]): Map<string, {
   return stats;
 }
 
-export function assessTicket(ticket: RawTicket, averageHours = 0, standardDeviation = 0, rules: GovernanceRules = defaultGovernanceRules): AssessmentResult {
+export function assessTicket(ticket: RawTicket, averageHours = 0, standardDeviation = 0, rules: GovernanceRules = defaultGovernanceRules, ifResult?: IFResult): AssessmentResult {
   let score = 100;
   const findings: string[] = [];
   const recommendations: string[] = [];
@@ -101,16 +148,30 @@ export function assessTicket(ticket: RawTicket, averageHours = 0, standardDeviat
   if (documentationIncomplete) { score -= rules.documentationPenalty; findings.push('Resolution documentation incomplete.'); recommendations.push('Improve resolution documentation requirements.'); }
   if (quality === 'poor') { score -= rules.poorQualityPenalty; findings.push('Resolution quality requires review.'); }
   if (quality === 'fair') { score -= rules.fairQualityPenalty; findings.push('Resolution quality could be improved.'); }
+
   const resolutionHours = hoursBetween(ticket.createdDate, ticket.resolutionDate);
-  const anomalyDetected = resolutionHours !== null && standardDeviation > 0 && resolutionHours > averageHours + standardDeviation;
-  if (anomalyDetected) findings.push('Prototype anomaly rule: resolution time is significantly higher than the average for this ticket type in the imported dataset.');
+  let anomalyDetected: boolean;
+
+  if (ifResult !== undefined) {
+    // Isolation Forest result — preferred path when computeIFScores has been run
+    anomalyDetected = ifResult.anomaly;
+    if (anomalyDetected) {
+      findings.push(`Isolation Forest anomaly: this ticket is a statistical outlier across ${ifResult.featureCount} audit features (anomaly score ${ifResult.score.toFixed(2)}).`);
+      recommendations.push('Behavioural anomaly flagged — prioritise for human auditor review.');
+    }
+  } else {
+    // Fallback: simple resolution-time threshold (used when IF scores are not available)
+    anomalyDetected = resolutionHours !== null && standardDeviation > 0 && resolutionHours > averageHours + standardDeviation;
+    if (anomalyDetected) findings.push('Resolution-time anomaly: significantly higher than the average for this ticket type in the imported dataset.');
+  }
+
   if (findings.length > 1) recommendations.push('Prioritise this ticket for auditor review.');
   if (!findings.length) findings.push('No material control exceptions found.');
   score = Math.max(0, Math.min(100, score));
   const riskLevel: RiskLevel = score >= rules.lowThreshold ? 'Low' : score >= rules.mediumThreshold ? 'Medium' : score >= rules.highThreshold ? 'High' : 'Critical';
   // "confidence" is an evidence-coverage indicator: it reflects how many independent, evidence-based
   // findings back this assessment. It is NOT a statistical or model-derived probability of correctness.
-  return { complianceScore: score, riskLevel, findings, recommendations: [...new Set(recommendations)], confidence: Math.min(96, 68 + findings.length * 8), anomalyDetected, resolutionHours };
+  return { complianceScore: score, riskLevel, findings, recommendations: [...new Set(recommendations)], confidence: Math.min(96, 68 + findings.length * 8), anomalyDetected, resolutionHours, ifAnomalyScore: ifResult?.score };
 }
 
 export type CriterionAgreement = { criterion: string; agreementPercent: number; agreeCount: number; disagreeCount: number; interpretation: 'Structured-field check — reads directly from ticket data' | 'Judgement-based — depends on reviewer interpretation' };

@@ -10,6 +10,11 @@ const aliases: Record<string, string[]> = {
   'Created Date': ['createddate', 'created', 'openeddate'], 'Resolution Date': ['resolutiondate', 'resolveddate', 'resolved', 'closeddate'],
   'SLA Status': ['slastatus', 'sla', 'slahours'], 'Approval Status': ['approvalstatus', 'approval'],
   'Resolution Notes': ['resolutionnotes', 'notes', 'resolutiondetail'], 'Resolution Quality': ['resolutionquality', 'quality'],
+  // Optional behavioural features (event-log derived) — not required; enriches IF when present
+  'Reassignment Count': ['reassignmentcount', 'reassignments', 'numberofrassignments', 'numberreassignments'],
+  'Reopen Count': ['reopencount', 'reopens', 'numberreopens', 'reopened'],
+  'Activity Count': ['activitycount', 'activities', 'numberofactivities', 'activityvolume'],
+  'Group Diversity': ['groupdiversity', 'groupcount', 'numberofgroups', 'distinctgroups'],
 };
 const canonicalTicketTypes: Record<string, RawTicket['ticketType']> = { incident: 'Incident', servicerequest: 'Service Request', changerequest: 'Change Request' };
 const canonicalTicketType = (value: unknown) => canonicalTicketTypes[normalize(String(value).replace(/[\u200B-\u200D\uFEFF]/g, ''))];
@@ -39,7 +44,8 @@ export async function parseTicketFile(file: File): Promise<ImportResult> {
       const required = [['Ticket ID', ticketId], ['Ticket Type', rawTicketType], ['Title', title], ['Description', description], ['Created Date', createdDate], ['Resolution Date', resolutionDate], ['Approval Status', approvalStatus], ['Resolution Quality', resolutionQuality]] as const;
       const empty = required.find(([, value]) => !value); if (empty) throw new Error(`Import failed: Malformed row ${index + 2} — ${empty[0]} is empty.`);
       if (!ticketType) throw new Error(`Import failed: Invalid row ${index + 2} — Ticket Type must be Incident, Service Request, or Change Request.`);
-      return { ticketId, ticketType, priority: read(row, 'Priority') || 'Unspecified', title, description, createdDate, resolutionDate, slaStatus: read(row, 'SLA Status') || 'Not provided', approvalStatus, resolutionNotes: read(row, 'Resolution Notes') || 'Not provided', resolutionQuality };
+      const readNum = (name: string) => { const raw = read(row, name); const n = Number(raw); return raw !== '' && Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined; };
+      return { ticketId, ticketType, priority: read(row, 'Priority') || 'Unspecified', title, description, createdDate, resolutionDate, slaStatus: read(row, 'SLA Status') || 'Not provided', approvalStatus, resolutionNotes: read(row, 'Resolution Notes') || 'Not provided', resolutionQuality, reassignmentCount: readNum('Reassignment Count'), reopenCount: readNum('Reopen Count'), activityCount: readNum('Activity Count'), groupDiversity: readNum('Group Diversity') };
     });
     return { tickets };
   } catch (error) { return { tickets: [], error: error instanceof Error && error.message.startsWith('Import failed:') ? error.message : 'Import failed: The file could not be parsed. Check the format and try again.' }; }
